@@ -1,0 +1,51 @@
+name: Test Agent
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build local test Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: corelinkai-safe:test
+          load: true
+          platforms: linux/amd64
+
+      - name: Start agent container
+        env:
+            SECRETS_JSON: ${{ toJson(secrets) }}
+        run: |
+          echo "$SECRETS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' > .env
+          docker run -d -p 9009:9009 --name agent-container --env-file .env corelinkai-safe:test --host 0.0.0.0 --port 9009
+          timeout 30 bash -c 'until curl -sf http://localhost:9009/.well-known/agent-card.json > /dev/null; do sleep 1; done'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install test dependencies
+        run: uv sync --extra test
+
+      - name: Run tests
+        run: uv run pytest -v --agent-url http://localhost:9009
+
+      - name: Stop container and show logs
+        if: always()
+        run: |
+          echo "=== Agent Container Logs ==="
+          docker logs agent-container || true
+          docker stop agent-container || true

@@ -1,90 +1,74 @@
-# A2A Agent Template
+# CoreLink AI Safe
 
-A minimal template for building [A2A (Agent-to-Agent)](https://a2a-protocol.org/latest/) agents.
+CoreLink AI Safe is an early policy/safety agent for A2A-compatible agent benchmarks. The current MVP is a Policy Case Runtime: it converts benchmark context into a normalized policy case, proposes one action at a time, validates that action through a runtime gate, and emits canonical policy decisions with traceable evidence.
 
-## Project Structure
+The first test target is Pi-Bench. Pi-Bench support is treated as benchmark testing and protocol integration, not as the full product boundary.
 
-```
+## Current Shape
+
+```text
 src/
-├─ server.py      # Server setup and agent card configuration
-├─ executor.py    # A2A request handling
-├─ agent.py       # Your agent implementation goes here
-└─ messenger.py   # A2A messaging utilities
+  server.py                         # stable entrypoint wrapper
+  a2a_bridge/                       # A2A server, executor, agent bridge
+  adapters/                         # benchmark/protocol adapters
+  runtime/                          # policy case models, gate, decision emitter
+  llm/                              # model-provider clients
 tests/
-└─ test_agent.py  # Agent tests
-Dockerfile            # Docker configuration
-pyproject.toml        # Python dependencies
-amber-manifest.json5  # Amber manifest
-.github/
-└─ workflows/
-   └─ test-and-publish.yml # CI workflow
+  test_agent.py                     # A2A conformance checks
+  test_policy_runtime.py            # runtime and Pi-Bench contract checks
+.agents/                            # planning, architecture, and progress docs
 ```
 
-## Getting Started
+The top-level `src/server.py`, `src/agent.py`, and `src/executor.py` files remain as thin compatibility wrappers so Docker and template test commands keep working while the internal folders evolve.
 
-1. **Create your repository** - Click "Use this template" to create your own repository from this template
+`a2a_bridge` is intentionally not named `a2a` because this project depends on the external `a2a-sdk` package, imported as `a2a`.
 
-2. **Implement your agent** - Add your agent logic to [`src/agent.py`](src/agent.py)
+## Model Provider
 
-3. **Configure your agent card** - Fill in your agent's metadata (name, skills, description) in [`src/server.py`](src/server.py)
+The runtime currently uses Nebius Token Factory through an OpenAI-compatible chat endpoint.
 
-4. **Fill out your [Amber](https://github.com/RDI-Foundation/amber) manifest** - Update [`amber-manifest.json5`](amber-manifest.json5) to use your agent in Amber scenarios
+Required for model-backed runs:
 
-5. **Write your tests** - Add custom tests for your agent in [`tests/test_agent.py`](tests/test_agent.py)
-
-For a concrete example of implementing an agent using this template, see this [draft PR](https://github.com/RDI-Foundation/agent-template/pull/8).
-
-## Running Locally
-
-```bash
-# Install dependencies
-uv sync
-
-# Run the server
-uv run src/server.py
+```powershell
+$env:NEBIUS_API_KEY = "<token>"
 ```
 
-## Running with Docker
+Optional:
 
-```bash
-# Build the image
-docker build -t my-agent .
-
-# Run the container
-docker run -p 9009:9009 my-agent
+```powershell
+$env:NEBIUS_MODEL = "meta-llama/Llama-3.3-70B-Instruct"
 ```
 
-## Testing
+If no model key is configured, the agent remains protocol-valid and falls back to safe escalation, but it is not competitive.
 
-Run A2A conformance tests against your agent.
+## Run Locally
 
-```bash
-# Install test dependencies
+```powershell
 uv sync --extra test
-
-# Start your agent (uv or docker; see above)
-
-# Run tests against your running agent URL
-uv run pytest --agent-url http://localhost:9009
+uv run python src/server.py --host 127.0.0.1 --port 9009
 ```
 
-## Publishing
+For Docker:
 
-The repository includes a GitHub Actions workflow that automatically builds, tests, and publishes a Docker image of your agent to GitHub Container Registry.
-
-If your agent needs API keys or other secrets, add them in Settings → Secrets and variables → Actions → Repository secrets. They'll be available as environment variables during CI tests.
-
-- **Push to `main`** → publishes `latest` tag:
-```
-ghcr.io/<your-username>/<your-repo-name>:latest
+```powershell
+docker build -t corelinkai-safe .
+docker run -p 9009:9009 --env-file .env corelinkai-safe --host 0.0.0.0 --port 9009
 ```
 
-- **Create a git tag** (e.g. `git tag v1.0.0 && git push origin v1.0.0`) → publishes version tags:
-```
-ghcr.io/<your-username>/<your-repo-name>:1.0.0
-ghcr.io/<your-username>/<your-repo-name>:1
+## Test
+
+Start the server, then run:
+
+```powershell
+uv run python -m pytest tests --agent-url http://127.0.0.1:9009
 ```
 
-Once the workflow completes, find your Docker image in the Packages section (right sidebar of your repository). Configure the package visibility in package settings.
+Runtime-only tests:
 
-> **Note:** Organization repositories may need package write permissions enabled manually (Settings → Actions → General). Version tags must follow [semantic versioning](https://semver.org/) (e.g., `v1.0.0`).
+```powershell
+uv run python -m pytest tests/test_policy_runtime.py
+```
+
+## CI Status
+
+GitHub Actions currently builds the Docker image and runs tests only. Package/image publishing is intentionally paused during early development.

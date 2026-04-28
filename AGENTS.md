@@ -28,29 +28,6 @@ Before making major changes, read the project docs in `.agents/`.
 
 Update these for the repo if they differ.
 
-### Environment / install
-
-- Install dependencies: `pip install -r requirements.txt`
-- Create venv if needed: `python -m venv .venv`
-- Activate venv (Unix): `source .venv/bin/activate`
-- Activate venv (Windows PowerShell): `.venv\\Scripts\\Activate.ps1`
-
-### Run
-
-- Main app: `python app.py`
-
-### Tests
-
-- Run all tests: `pytest`
-- Run one test file: `pytest tests/test_file.py`
-- Run one test: `pytest tests/test_file.py -k test_name`
-
-### Quality
-
-- Format: `black .`
-- Lint: `ruff check .`
-- Type check if configured: `mypy src`
-
 ## Constraints
 
 - Do not deploy, modify secrets, or perform destructive operations unless explicitly requested.
@@ -69,21 +46,20 @@ Each entry should include:
 - date
 - role: planner / coder / reviewer
 - what changed
-- why it changed
 - validation or evidence
-- next step
+- next step/ handoff notes
 
 Keep the file focused on recent major updates.
-Move older condensed history into `.agents/memory/summaries.md`.
+Move older condensed history into `.agents/memory/summaries.md`(this is triggered manually by user).
 
 ## Execution-plan rules
 
 - Keep one execution plan file per version.
 - A version plan may contain multiple phases.
-- Each phase should include objective, tasks, implementation notes, and exit criteria.
+- Each phase should include objective, tasks, implementation notes(this if after phase done), and exit criteria.
 - If a later stabilization track is needed, append it to the same version file instead of creating many tiny phase files.
 
-## Checkpoints and reviews
+## Checkpoints and reviews (this triggered manually)
 
 Create a checkpoint under `.agents/checkpoints/` when:
 

@@ -1,7 +1,7 @@
 [project]
-name = "agent-template"
+name = "corelinkai-safe"
 version = "0.1.0"
-description = "A template for A2A agents"
+description = "Policy/safety agent runtime for A2A policy-compliance benchmarks"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
