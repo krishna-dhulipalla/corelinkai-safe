@@ -40,8 +40,20 @@ class ToolSchema:
 
     @property
     def required_args(self) -> list[str]:
-        required = self.parameters.get("required", [])
-        return [str(item) for item in required] if isinstance(required, list) else []
+        required = self.parameters.get("required")
+        if isinstance(required, list):
+            return [str(item) for item in required]
+
+        found: list[str] = []
+        properties = self.parameters.get("properties")
+        if isinstance(properties, dict):
+            candidates = properties
+        else:
+            candidates = self.parameters
+        for name, schema in candidates.items():
+            if isinstance(schema, dict) and schema.get("required") is True:
+                found.append(str(name))
+        return found
 
 
 @dataclass

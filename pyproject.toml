@@ -6,6 +6,9 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "a2a-sdk[http-server]>=0.3.20",
+    "langchain-core>=1.1.0",
+    "langgraph>=1.1.0",
+    "langsmith>=0.4.0",
     "uvicorn>=0.38.0",
 ]
 

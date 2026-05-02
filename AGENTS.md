@@ -18,15 +18,68 @@ Before making major changes, read the project docs in `.agents/`.
 
 ## Working mode
 
-- Prefer small, verifiable changes over broad rewrites.
-- Respect the current version execution plan before changing architecture.
 - Do not silently introduce major runtime-flow changes.
 - When changing architecture or control flow, update the relevant docs.
 - Keep project instructions practical and lightweight; do not overfit them to one tool.
 
 ## Commands
 
-Update these for the repo if they differ.
+Local setup:
+
+```powershell
+uv sync --extra test
+```
+
+Run the agent locally:
+
+```powershell
+$env:NEBIUS_API_KEY = "<token>"
+$env:NEBIUS_MODEL = "meta-llama/Llama-3.3-70B-Instruct"
+$env:POLICY_GRAPH_RECURSION_LIMIT = "20"
+uv run python src/server.py --host 127.0.0.1 --port 9010 --card-url http://127.0.0.1:9010
+```
+
+Optional LangSmith node tracing:
+
+```powershell
+$env:LANGSMITH_API_KEY = "<token>"
+$env:LANGSMITH_TRACING = "true"
+$env:LANGSMITH_PROJECT = "corelinkai-safe"
+```
+
+`LANGSMITH_API_KEY` alone does not create traces. Set `LANGSMITH_TRACING=true`; the LangGraph runtime wraps graph nodes with LangSmith spans when tracing is enabled.
+
+Run tests against a running local agent:
+
+```powershell
+uv run python -m pytest tests --agent-url http://127.0.0.1:9010
+```
+
+Run with Pi-Bench for benchmark smoke testing:
+
+1. Clone Pi-Bench separately, preferably as a sibling repo, not inside this repository.
+
+```powershell
+git clone https://github.com/Jyoti-Ranjan-Das845/pi-bench ..\pi-bench
+cd ..\pi-bench
+python -m pip install -e .
+```
+
+2. Start this agent from `corelinkai-safe` in another terminal.
+
+```powershell
+uv run python src/server.py --host 127.0.0.1 --port 9010 --card-url http://127.0.0.1:9010
+```
+
+3. From the Pi-Bench repo, run an A2A smoke pass against the external agent.
+
+```powershell
+python examples/a2a_demo/run_a2a.py --external --host 127.0.0.1 --port 9010 --serve-user --user-kind scripted --scenarios-dir scenarios/retail --concurrency 1 --max-steps 20 --save-to runs/corelinkai-safe-retail-smoke.json
+```
+
+Use the first Pi-Bench run only as a diagnostic smoke test. Classify failures by protocol, parsing, invalid tool call, wrong decision, tool argument, ordering/state, under-refusal, or over-refusal before changing architecture.
+
+If the evaluator runs from Docker and calls a host-run agent, bind with `--host 0.0.0.0` but advertise a reachable URL such as `--card-url http://host.docker.internal:9010`; do not advertise `0.0.0.0` as the agent URL.
 
 ## Constraints
 

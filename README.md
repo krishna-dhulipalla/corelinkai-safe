@@ -1,6 +1,6 @@
 # CoreLink AI Safe
 
-CoreLink AI Safe is an early policy/safety agent for A2A-compatible agent benchmarks. The current MVP is a Policy Case Runtime: it converts benchmark context into a normalized policy case, proposes one action at a time, validates that action through a runtime gate, and emits canonical policy decisions with traceable evidence.
+CoreLink AI Safe is an early policy/safety agent for A2A-compatible agent benchmarks. The current runtime is a LangGraph Policy Graph Runtime: it converts benchmark context into a normalized policy case, plans evidence needs, proposes one action at a time, validates that action through a hybrid runtime gate, and emits canonical policy decisions with traceable evidence.
 
 The first test target is Pi-Bench. Pi-Bench support is treated as benchmark testing and protocol integration, not as the full product boundary.
 
@@ -11,7 +11,7 @@ src/
   server.py                         # stable entrypoint wrapper
   a2a_bridge/                       # A2A server, executor, agent bridge
   adapters/                         # benchmark/protocol adapters
-  runtime/                          # policy case models, gate, decision emitter
+  runtime/                          # LangGraph runtime, policy case models, gate, decision emitter
   llm/                              # model-provider clients
 tests/
   test_agent.py                     # A2A conformance checks
@@ -37,9 +37,18 @@ Optional:
 
 ```powershell
 $env:NEBIUS_MODEL = "meta-llama/Llama-3.3-70B-Instruct"
+$env:POLICY_GRAPH_RECURSION_LIMIT = "20"
 ```
 
 If no model key is configured, the agent remains protocol-valid and falls back to safe escalation, but it is not competitive.
+
+Optional LangSmith tracing:
+
+```powershell
+$env:LANGSMITH_API_KEY = "<token>"
+$env:LANGSMITH_TRACING = "true"
+$env:LANGSMITH_PROJECT = "corelinkai-safe"
+```
 
 ## Run Locally
 

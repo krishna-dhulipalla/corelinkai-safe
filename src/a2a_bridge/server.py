@@ -31,11 +31,11 @@ def main():
     args = parser.parse_args()
 
     skill = AgentSkill(
-        id="policy-case-runtime",
-        name="Policy Case Runtime",
+        id="policy-graph-runtime",
+        name="Policy Graph Runtime",
         description=(
             "Policy-compliance agent for Pi-Bench tasks with runtime action "
-            "validation, canonical decisions, and audit-ready traces."
+            "planning, graph-based validation, canonical decisions, and audit-ready traces."
         ),
         tags=["policy", "safety", "pi-bench", "agentbeats"],
         examples=[
@@ -44,10 +44,10 @@ def main():
     )
 
     agent_card = AgentCard(
-        name="CoreLink Policy Case Runtime",
+        name="CoreLink Policy Graph Runtime",
         description=(
             "A benchmark-neutral policy/safety participant agent optimized first "
-            "for Pi-Bench A2A evaluation."
+            "for Pi-Bench A2A evaluation with LangGraph-controlled policy flow."
         ),
         url=args.card_url or f"http://{args.host}:{args.port}/",
         version='1.0.0',
@@ -76,7 +76,8 @@ def main():
         """
         return JSONResponse(
             {
-                "name": "corelink-policy-case-runtime",
+                "name": "corelink-policy-graph-runtime",
+                "runtime": "v1_policy_graph_runtime",
                 "description": agent_card.description,
                 "url": agent_card.url,
                 "extensions": [POLICY_BOOTSTRAP_EXTENSION],

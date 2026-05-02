@@ -1,1 +1,1 @@
-"""Policy case runtime."""
+"""LangGraph policy runtime."""
