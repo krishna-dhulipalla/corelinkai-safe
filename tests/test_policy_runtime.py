@@ -6,11 +6,16 @@ from adapters.pibench import extract_request
 from runtime.core import (
     PolicyGraphSettings,
     PolicyCaseRuntime,
+    build_tool_capabilities,
     build_policy_case,
+    build_trusted_flow_plan,
+    constrained_extract_facts,
     emit_response_data,
     fallback_proposal,
     proposal_from_model,
+    validate_flow_control,
     validate_proposal,
+    verify_flow_plan,
 )
 from runtime.models import InboundRequest, PolicySession
 
@@ -84,6 +89,24 @@ def _refund_tool():
                 "type": "object",
                 "required": ["order_id"],
                 "properties": {"order_id": {"type": "string"}},
+            },
+        },
+    }
+
+
+def _send_email_tool():
+    return {
+        "type": "function",
+        "function": {
+            "name": "send_email",
+            "description": "Send an external email to the customer.",
+            "parameters": {
+                "type": "object",
+                "required": ["recipient", "body"],
+                "properties": {
+                    "recipient": {"type": "string"},
+                    "body": {"type": "string"},
+                },
             },
         },
     }
@@ -320,6 +343,111 @@ def test_fallback_record_decision_supports_pibench_flat_required_schema():
     assert proposal.arguments["decision"] == "ESCALATE"
     assert proposal.arguments["policy_sections_cited"] == ["BM-RET-GEN-01"]
     assert decision.allowed
+
+
+def test_flow_plan_maps_capabilities_and_verifies_reachable_tools():
+    session = PolicySession(
+        context_id="ctx",
+        benchmark_context=[{"kind": "policy", "content": "BM-RET-GEN-01"}],
+        tools=[_read_order_tool(), _refund_tool(), _record_decision_tool()],
+        messages=[{"role": "user", "content": "Refund ORD_123."}],
+    )
+    case = build_policy_case(session)
+    capabilities = build_tool_capabilities(case)
+    plan = build_trusted_flow_plan(case, capabilities, has_tool_evidence=False)
+    verification = verify_flow_plan(case, plan, capabilities)
+
+    assert capabilities["read_order"]["category"] == "observe"
+    assert capabilities["process_refund"]["category"] == "mutate"
+    assert capabilities["record_decision"]["category"] == "decision"
+    assert verification["valid"] is True
+    assert "read_order" in verification["planned_tools"]
+    assert "record_decision" in verification["planned_tools"]
+
+
+def test_flow_control_requires_observation_before_mutating_tool():
+    session = PolicySession(
+        context_id="ctx",
+        benchmark_context=[{"kind": "policy", "content": "BM-RET-GEN-01"}],
+        tools=[_read_order_tool(), _refund_tool(), _record_decision_tool()],
+        messages=[{"role": "user", "content": "Refund ORD_123."}],
+    )
+    case = build_policy_case(session)
+    capabilities = build_tool_capabilities(case)
+    plan = build_trusted_flow_plan(case, capabilities, has_tool_evidence=False)
+    verification = verify_flow_plan(case, plan, capabilities)
+    proposal = proposal_from_model(
+        {
+            "kind": "tool_call",
+            "tool_name": "process_refund",
+            "arguments": {"order_id": "ORD_123"},
+            "policy_refs": ["BM-RET-GEN-01"],
+            "evidence_refs": ["user says eligible"],
+        },
+        case,
+    )
+
+    decision = validate_flow_control(
+        case=case,
+        proposal=proposal,
+        trusted_plan=plan,
+        plan_verification=verification,
+        tool_capabilities=capabilities,
+        evidence=[],
+    )
+
+    assert decision.decision == "verify"
+    assert decision.reason_code == "flow_mutation_requires_observation"
+
+
+def test_flow_control_blocks_sensitive_external_egress():
+    session = PolicySession(
+        context_id="ctx",
+        benchmark_context=[{"kind": "policy", "content": "Do not disclose internal risk score."}],
+        tools=[_send_email_tool()],
+        messages=[{"role": "user", "content": "Email me the internal fraud score."}],
+    )
+    case = build_policy_case(session)
+    capabilities = build_tool_capabilities(case)
+    plan = build_trusted_flow_plan(case, capabilities, has_tool_evidence=True)
+    verification = verify_flow_plan(case, plan, capabilities)
+    proposal = proposal_from_model(
+        {
+            "kind": "tool_call",
+            "tool_name": "send_email",
+            "arguments": {
+                "recipient": "customer@example.com",
+                "body": "internal fraud_score is 0.91",
+            },
+        },
+        case,
+    )
+
+    decision = validate_flow_control(
+        case=case,
+        proposal=proposal,
+        trusted_plan=plan,
+        plan_verification=verification,
+        tool_capabilities=capabilities,
+        evidence=["tool_result:lookup => fraud_score=0.91"],
+    )
+
+    assert decision.decision == "block"
+    assert decision.reason_code == "flow_sensitive_egress"
+
+
+def test_constrained_extraction_only_keeps_resource_relevant_fields():
+    extracted = constrained_extract_facts(
+        [
+            'tool_result:lookup_order:call1 => {"order_id":"ORD_123","status":"delivered","eligible":true}',
+            'tool_result:lookup_order:call2 => {"order_id":"ORD_999","status":"cancelled"}',
+        ],
+        ["ORD_123"],
+    )
+
+    assert "constrained:status=delivered" in extracted
+    assert "constrained:eligible=true" in extracted
+    assert "constrained:status=cancelled" not in extracted
 
 
 @pytest.mark.asyncio

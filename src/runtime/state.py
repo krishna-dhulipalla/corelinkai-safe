@@ -27,6 +27,11 @@ class PolicyGraphState(TypedDict, total=False):
     facts: list[str]
     evidence: list[str]
     provenance_labels: dict[str, str]
+    flow_labels: dict[str, dict[str, Any]]
+    tool_capabilities: dict[str, dict[str, Any]]
+    trusted_plan: list[dict[str, Any]]
+    plan_verification: dict[str, Any]
+    constrained_facts: list[str]
     plan: list[str]
     policy_obligations: list[str]
     case: PolicyCase

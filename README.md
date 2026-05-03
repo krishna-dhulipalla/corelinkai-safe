@@ -1,6 +1,6 @@
 # CoreLink AI Safe
 
-CoreLink AI Safe is an early policy/safety agent for A2A-compatible agent benchmarks. The current runtime is a LangGraph Policy Graph Runtime: it converts benchmark context into a normalized policy case, plans evidence needs, proposes one action at a time, validates that action through a hybrid runtime gate, and emits canonical policy decisions with traceable evidence.
+CoreLink AI Safe is an early policy/safety agent for A2A-compatible agent benchmarks. The current runtime is a LangGraph Flow-Control Policy Graph Runtime: it converts benchmark context into a normalized policy case, builds a trusted flow plan, labels memory, maps tool capabilities, proposes one action at a time, validates that action through flow-control and runtime gates, and emits canonical policy decisions with traceable evidence.
 
 The first test target is Pi-Bench. Pi-Bench support is treated as benchmark testing and protocol integration, not as the full product boundary.
 
@@ -11,7 +11,7 @@ src/
   server.py                         # stable entrypoint wrapper
   a2a_bridge/                       # A2A server, executor, agent bridge
   adapters/                         # benchmark/protocol adapters
-  runtime/                          # LangGraph runtime, policy case models, gate, decision emitter
+  runtime/                          # LangGraph flow-control runtime, policy models, gates, decision emitter
   llm/                              # model-provider clients
 tests/
   test_agent.py                     # A2A conformance checks
