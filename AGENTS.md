@@ -34,9 +34,18 @@ Run the agent locally:
 
 ```powershell
 $env:NEBIUS_API_KEY = "<token>"
-$env:NEBIUS_MODEL = "meta-llama/Llama-3.3-70B-Instruct"
+$env:NEBIUS_PRIMARY_MODEL = "deepseek-ai/DeepSeek-V4-Pro"
+$env:NEBIUS_MEDIUM_MODEL = "meta-llama/Llama-3.3-70B-Instruct"
 $env:POLICY_GRAPH_RECURSION_LIMIT = "20"
 uv run python src/server.py --host 127.0.0.1 --port 9010 --card-url http://127.0.0.1:9010
+```
+
+`NEBIUS_MODEL` is still accepted as a backward-compatible primary-model fallback. The runtime loads `.env` values only when they are not already present in the process environment.
+
+Check Nebius model access:
+
+```powershell
+uv run python scripts/nebius_preflight.py --list
 ```
 
 Optional LangSmith node tracing:
@@ -52,6 +61,7 @@ $env:LANGSMITH_PROJECT = "corelinkai-safe"
 Run tests against a running local agent:
 
 ```powershell
+$env:LANGSMITH_TRACING = "false"  # keep conformance tests fast unless tracing is under test
 uv run python -m pytest tests --agent-url http://127.0.0.1:9010
 ```
 
@@ -78,6 +88,15 @@ python examples/a2a_demo/run_a2a.py --external --host 127.0.0.1 --port 9010 --se
 ```
 
 Use the first Pi-Bench run only as a diagnostic smoke test. Classify failures by protocol, parsing, invalid tool call, wrong decision, tool argument, ordering/state, under-refusal, or over-refusal before changing architecture.
+
+Run selected real business cases for presentation:
+
+```powershell
+uv run python scripts/run_business_cases.py --pi-bench-root ..\pi-bench --host 127.0.0.1 --port 9010
+```
+
+The default set covers retail standard refund, retail fraud-disclosure privacy, helpdesk cross-employee account disclosure, and FINRA privacy-shield trust-wire escalation. Reports are generated under `generated/business_cases/`.
+If Pi-Bench dependencies are installed outside this repo's uv environment, pass that interpreter with `--python`.
 
 If the evaluator runs from Docker and calls a host-run agent, bind with `--host 0.0.0.0` but advertise a reachable URL such as `--card-url http://host.docker.internal:9010`; do not advertise `0.0.0.0` as the agent URL.
 

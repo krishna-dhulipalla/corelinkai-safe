@@ -6,7 +6,12 @@ from uuid import uuid4
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 
-from llm.nebius import ModelClientError, NebiusChatClient, extract_json_object
+from llm.nebius import (
+    ModelClientError,
+    NebiusChatClient,
+    NebiusModelRouter,
+    extract_json_object,
+)
 from runtime.case_builder import build_context_bundle, build_policy_case
 from runtime.flow_control import (
     build_tool_capabilities,
@@ -31,7 +36,13 @@ from runtime.policies import (
     safe_message,
     validate_proposal,
 )
-from runtime.solver import build_solver_messages, proposal_from_model
+from runtime.solver import (
+    build_constrained_extraction_messages,
+    build_decision_verifier_messages,
+    build_policy_mapper_messages,
+    build_solver_messages,
+    proposal_from_model,
+)
 from runtime.state import (
     PolicyGraphRuntimeContext,
     PolicyGraphSettings,
@@ -50,10 +61,16 @@ class PolicyCaseRuntime:
     def __init__(
         self,
         model_client: NebiusChatClient | None = None,
+        model_router: NebiusModelRouter | None = None,
         settings: PolicyGraphSettings | None = None,
     ):
         self.context = PolicyGraphRuntimeContext(
-            model_client=model_client or NebiusChatClient(),
+            model_router=model_router
+            or (
+                NebiusModelRouter.from_single_client(model_client)
+                if model_client is not None
+                else NebiusModelRouter.from_env()
+            ),
             settings=settings or PolicyGraphSettings.from_env(),
         )
         self.sessions: dict[str, PolicySession] = {}
@@ -318,7 +335,7 @@ class PolicyCaseRuntime:
             ),
         }
 
-    def policy_mapper(self, state: PolicyGraphState) -> PolicyGraphState:
+    async def policy_mapper(self, state: PolicyGraphState) -> PolicyGraphState:
         case = state["case"]
         obligations = [
             "Use only tools listed in the current benchmark context.",
@@ -335,12 +352,47 @@ class PolicyCaseRuntime:
             )
         if case.sensitive_fields:
             obligations.append("Do not disclose internal, hidden, or confidential fields.")
+        mode = "deterministic"
+        if (
+            (state.get("policy_context") or case.available_tools)
+            and self.context.model_router.role_configured("medium")
+        ):
+            messages = build_policy_mapper_messages(
+                case,
+                obligations,
+                policy_context=state.get("policy_context", []),
+                facts=state.get("facts", []),
+                trusted_plan=state.get("trusted_plan", []),
+            )
+            try:
+                raw = await self.context.model_router.client_for("medium").complete(messages)
+                parsed = extract_json_object(raw)
+                for obligation in _string_list(parsed.get("obligations")):
+                    if obligation not in obligations:
+                        obligations.append(obligation)
+                mode = "medium_model"
+            except (ModelClientError, ValueError, Exception) as exc:
+                return {
+                    "policy_obligations": obligations,
+                    "graph_errors": [f"policy_mapper_medium: {exc}"],
+                    **self._event(
+                        state,
+                        "policy_mapper",
+                        {
+                            "mode": "medium_model_error",
+                            "error": str(exc),
+                            "obligation_count": len(obligations),
+                            "policy_refs": case.policy_clauses[:8],
+                        },
+                    ),
+                }
         return {
             "policy_obligations": obligations,
             **self._event(
                 state,
                 "policy_mapper",
                 {
+                    "mode": mode,
                     "obligation_count": len(obligations),
                     "policy_refs": case.policy_clauses[:8],
                 },
@@ -379,11 +431,45 @@ class PolicyCaseRuntime:
             ),
         }
 
-    def constrained_extraction(self, state: PolicyGraphState) -> PolicyGraphState:
+    async def constrained_extraction(self, state: PolicyGraphState) -> PolicyGraphState:
         constrained = constrained_extract_facts(
             state.get("evidence", []),
             state["case"].resource_refs,
         )
+        mode = "deterministic"
+        if state.get("evidence") and self.context.model_router.role_configured("medium"):
+            messages = build_constrained_extraction_messages(
+                state["case"],
+                evidence=state.get("evidence", []),
+                deterministic_facts=constrained,
+            )
+            try:
+                raw = await self.context.model_router.client_for("medium").complete(messages)
+                parsed = extract_json_object(raw)
+                for fact in _string_list(parsed.get("facts")):
+                    if fact not in constrained:
+                        constrained.append(fact)
+                mode = "medium_model"
+            except (ModelClientError, ValueError, Exception) as exc:
+                facts = list(state.get("facts", []))
+                for fact in constrained:
+                    if fact not in facts:
+                        facts.append(fact)
+                return {
+                    "constrained_facts": constrained,
+                    "facts": facts,
+                    "graph_errors": [f"constrained_extraction_medium: {exc}"],
+                    **self._event(
+                        state,
+                        "constrained_extraction",
+                        {
+                            "mode": "medium_model_error",
+                            "error": str(exc),
+                            "constrained_fact_count": len(constrained),
+                            "constrained_facts": constrained,
+                        },
+                    ),
+                }
         facts = list(state.get("facts", []))
         for fact in constrained:
             if fact not in facts:
@@ -395,6 +481,7 @@ class PolicyCaseRuntime:
                 state,
                 "constrained_extraction",
                 {
+                    "mode": mode,
                     "constrained_fact_count": len(constrained),
                     "constrained_facts": constrained,
                 },
@@ -405,6 +492,24 @@ class PolicyCaseRuntime:
         case = state["case"]
         session = state["session"]
         iteration = state.get("iteration_count", 0) + 1
+        if not case.available_tools and not state.get("policy_context"):
+            proposal = safe_message(
+                "CoreLink Policy Graph Runtime is ready for policy context and tools."
+            )
+            return {
+                "iteration_count": iteration,
+                "candidate_payload": {},
+                "proposal": proposal,
+                **self._event(
+                    state,
+                    "candidate_action",
+                    {
+                        "mode": "empty_context_fast_path",
+                        "iteration": iteration,
+                        "proposal": _proposal_payload(proposal),
+                    },
+                ),
+            }
         if iteration >= self.context.settings.recursion_limit:
             proposal = fallback_proposal(case)
             return {
@@ -422,7 +527,7 @@ class PolicyCaseRuntime:
                 ),
             }
 
-        if not self.context.model_client.configured:
+        if not self.context.model_router.role_configured("primary"):
             proposal = fallback_proposal(case)
             return {
                 "iteration_count": iteration,
@@ -459,7 +564,7 @@ class PolicyCaseRuntime:
             gate_feedback=gate_feedback,
         )
         try:
-            raw = await self.context.model_client.complete(messages)
+            raw = await self.context.model_router.client_for("primary").complete(messages)
             parsed = extract_json_object(raw)
         except (ModelClientError, ValueError, Exception) as exc:
             proposal = fallback_proposal(case)
@@ -560,7 +665,7 @@ class PolicyCaseRuntime:
             ),
         }
 
-    def decision_verifier(self, state: PolicyGraphState) -> PolicyGraphState:
+    async def decision_verifier(self, state: PolicyGraphState) -> PolicyGraphState:
         proposal = state["proposal"]
         case = state["case"]
         gate = state["gate_decision"]
@@ -592,11 +697,46 @@ class PolicyCaseRuntime:
             if "policy_sections_cited" not in proposal.arguments and case.policy_clauses:
                 proposal.arguments["policy_sections_cited"] = case.policy_clauses[:3]
 
-        return self._event(
-            state,
-            "decision_verifier",
-            {"mode": "verified", "proposal_id": proposal.proposal_id},
+        verifier_payload: dict[str, Any] = {}
+        verifier_errors: list[str] = []
+        if (
+            proposal.kind == "tool_call"
+            and proposal.tool_name == "record_decision"
+            and self.context.model_router.role_configured("medium")
+        ):
+            messages = build_decision_verifier_messages(
+                case,
+                proposal,
+                policy_obligations=state.get("policy_obligations", []),
+                evidence=state.get("evidence", []),
+            )
+            try:
+                raw = await self.context.model_router.client_for("medium").complete(messages)
+                parsed = extract_json_object(raw)
+                verifier_payload = {
+                    "medium_valid": parsed.get("valid"),
+                    "medium_issues": _string_list(parsed.get("issues")),
+                    "medium_recommended_decision": str(
+                        parsed.get("recommended_decision", "")
+                    ),
+                }
+            except (ModelClientError, ValueError, Exception) as exc:
+                verifier_payload = {
+                    "medium_error": str(exc),
+                }
+                verifier_errors.append(f"decision_verifier_medium: {exc}")
+
+        update: PolicyGraphState = {}
+        if verifier_errors:
+            update["graph_errors"] = verifier_errors
+        update.update(
+            self._event(
+                state,
+                "decision_verifier",
+                {"mode": "verified", "proposal_id": proposal.proposal_id, **verifier_payload},
+            )
         )
+        return update
 
     def emit_response(self, state: PolicyGraphState) -> PolicyGraphState:
         request = state["request"]
@@ -760,3 +900,9 @@ def _gate_payload(gate: GateDecision) -> dict[str, Any]:
         "policy_refs": gate.policy_refs,
         "evidence_refs": gate.evidence_refs,
     }
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]

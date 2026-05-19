@@ -1,9 +1,12 @@
+import os
+
 import pytest
 
 from a2a.types import DataPart, Message, Part, Role
 
 from adapters.pibench import extract_request
 from runtime.core import (
+    NebiusModelRouter,
     PolicyGraphSettings,
     PolicyCaseRuntime,
     build_tool_capabilities,
@@ -12,6 +15,7 @@ from runtime.core import (
     constrained_extract_facts,
     emit_response_data,
     fallback_proposal,
+    load_env_file,
     proposal_from_model,
     validate_flow_control,
     validate_proposal,
@@ -44,6 +48,18 @@ class SequenceModel:
         if len(self.contents) > 1:
             return self.contents.pop(0)
         return self.contents[0]
+
+
+class RecordingModel:
+    configured = True
+
+    def __init__(self, content: str):
+        self.content = content
+        self.calls = []
+
+    async def complete(self, messages):
+        self.calls.append(messages)
+        return self.content
 
 
 def _record_decision_tool():
@@ -343,6 +359,137 @@ def test_fallback_record_decision_supports_pibench_flat_required_schema():
     assert proposal.arguments["decision"] == "ESCALATE"
     assert proposal.arguments["policy_sections_cited"] == ["BM-RET-GEN-01"]
     assert decision.allowed
+
+
+def test_env_loader_does_not_override_existing_process_env(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "NEBIUS_API_KEY=from-file\nNEBIUS_PRIMARY_MODEL=from-file-model\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("NEBIUS_API_KEY", raising=False)
+    monkeypatch.setenv("NEBIUS_PRIMARY_MODEL", "from-process")
+
+    loaded = load_env_file(env_file)
+
+    assert os.environ["NEBIUS_API_KEY"] == "from-file"
+    assert os.environ["NEBIUS_PRIMARY_MODEL"] == "from-process"
+    assert "NEBIUS_API_KEY" in loaded
+    assert "NEBIUS_PRIMARY_MODEL" not in loaded
+
+
+@pytest.mark.asyncio
+async def test_model_router_uses_primary_for_candidate_and_medium_for_auxiliary_nodes():
+    primary = RecordingModel(
+        """
+        {
+          "kind": "record_decision",
+          "decision": "DENY",
+          "arguments": {"decision": "DENY"},
+          "policy_refs": ["BM-RET-GEN-01"],
+          "rationale": "Policy blocks the request."
+        }
+        """
+    )
+    medium = RecordingModel(
+        """
+        {
+          "obligations": ["Keep the customer-facing response policy grounded."],
+          "risk_notes": ["Privacy boundary present."],
+          "valid": true,
+          "issues": [],
+          "recommended_decision": "DENY"
+        }
+        """
+    )
+    runtime = PolicyCaseRuntime(
+        model_router=NebiusModelRouter(primary=primary, medium=medium)
+    )
+    boot = await runtime.handle(
+        InboundRequest(
+            is_bootstrap=True,
+            benchmark_context=[
+                {"kind": "policy", "content": "BM-RET-GEN-01: Deny requests that do not meet requirements."}
+            ],
+            tools=[_record_decision_tool()],
+        )
+    )
+
+    response = await runtime.handle(
+        InboundRequest(
+            is_bootstrap=False,
+            context_id=boot.data["context_id"],
+            messages=[{"role": "user", "content": "Please process this request."}],
+        )
+    )
+
+    assert response.data["tool_calls"][0]["function"]["name"] == "record_decision"
+    assert len(primary.calls) == 1
+    assert len(medium.calls) >= 2
+    assert "auxiliary policy mapping" in medium.calls[0][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_medium_model_invalid_json_falls_back_to_deterministic_nodes():
+    primary = RecordingModel(
+        """
+        {
+          "kind": "record_decision",
+          "decision": "ESCALATE",
+          "arguments": {"decision": "ESCALATE"},
+          "policy_refs": ["BM-RET-GEN-01"],
+          "rationale": "Escalate when auxiliary verification is unavailable."
+        }
+        """
+    )
+    medium = RecordingModel("not-json")
+    runtime = PolicyCaseRuntime(
+        model_router=NebiusModelRouter(primary=primary, medium=medium)
+    )
+    boot = await runtime.handle(
+        InboundRequest(
+            is_bootstrap=True,
+            benchmark_context=[
+                {"kind": "policy", "content": "BM-RET-GEN-01: Escalate when verification fails."}
+            ],
+            tools=[_record_decision_tool()],
+        )
+    )
+
+    response = await runtime.handle(
+        InboundRequest(
+            is_bootstrap=False,
+            context_id=boot.data["context_id"],
+            messages=[{"role": "user", "content": "Please decide."}],
+        )
+    )
+
+    assert response.data["tool_calls"][0]["function"]["name"] == "record_decision"
+    assert any(
+        event.event_type == "policy_mapper"
+        and event.payload.get("mode") == "medium_model_error"
+        for event in response.audit_events
+    )
+
+
+@pytest.mark.asyncio
+async def test_empty_policy_context_uses_fast_path_without_model_calls():
+    primary = RecordingModel('{"kind":"message","content":"should not run"}')
+    medium = RecordingModel('{"obligations":["should not run"]}')
+    runtime = PolicyCaseRuntime(
+        model_router=NebiusModelRouter(primary=primary, medium=medium)
+    )
+
+    response = await runtime.handle(
+        InboundRequest(
+            is_bootstrap=False,
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+    )
+
+    assert "content" in response.data
+    assert primary.calls == []
+    assert medium.calls == []
 
 
 def test_flow_plan_maps_capabilities_and_verifies_reachable_tools():

@@ -18,12 +18,17 @@ from a2a.types import (
 
 from a2a_bridge.executor import Executor
 from adapters.pibench import extract_request_from_json_message
-from llm.nebius import DEFAULT_NEBIUS_MODEL
+from llm.nebius import (
+    DEFAULT_NEBIUS_MEDIUM_MODEL,
+    DEFAULT_NEBIUS_PRIMARY_MODEL,
+    load_env_file,
+)
 from runtime.core import PolicyCaseRuntime
 from runtime.models import POLICY_BOOTSTRAP_EXTENSION
 
 
 def main():
+    load_env_file()
     parser = argparse.ArgumentParser(description="Run the A2A agent.")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to bind the server")
     parser.add_argument("--port", type=int, default=9009, help="Port to bind the server")
@@ -74,6 +79,16 @@ def main():
         Pi-Bench checks this non-standard A2A card path for the bootstrap
         extension before falling back to stateless requests.
         """
+        primary_model = getattr(
+            getattr(runtime.context.model_router.primary, "config", None),
+            "model",
+            DEFAULT_NEBIUS_PRIMARY_MODEL,
+        )
+        medium_model = getattr(
+            getattr(runtime.context.model_router.medium, "config", None),
+            "model",
+            DEFAULT_NEBIUS_MEDIUM_MODEL,
+        )
         return JSONResponse(
             {
                 "name": "corelink-policy-graph-runtime",
@@ -82,7 +97,11 @@ def main():
                 "url": agent_card.url,
                 "extensions": [POLICY_BOOTSTRAP_EXTENSION],
                 "capabilities": {"message": True},
-                "model": DEFAULT_NEBIUS_MODEL,
+                "model": primary_model,
+                "models": {
+                    "primary": primary_model,
+                    "medium": medium_model,
+                },
             }
         )
 

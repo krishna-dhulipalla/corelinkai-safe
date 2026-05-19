@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from operator import add
 from typing import Annotated, Any, TypedDict
 
-from llm.nebius import NebiusChatClient
+from llm.nebius import NebiusModelRouter, load_env_file
 from runtime.models import (
     ActionProposal,
     AuditEvent,
@@ -53,6 +53,7 @@ class PolicyGraphSettings:
 
     @classmethod
     def from_env(cls) -> "PolicyGraphSettings":
+        load_env_file()
         return cls(
             recursion_limit=_positive_int(
                 os.environ.get("POLICY_GRAPH_RECURSION_LIMIT"), 20
@@ -65,8 +66,12 @@ class PolicyGraphSettings:
 
 @dataclass
 class PolicyGraphRuntimeContext:
-    model_client: NebiusChatClient
+    model_router: NebiusModelRouter
     settings: PolicyGraphSettings
+
+    @property
+    def model_client(self):
+        return self.model_router.primary
 
 
 def _positive_int(value: str | None, default: int) -> int:

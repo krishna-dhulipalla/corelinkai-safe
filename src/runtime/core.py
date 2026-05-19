@@ -18,6 +18,7 @@ from runtime.policies import (
     validate_proposal,
 )
 from runtime.solver import build_solver_messages, proposal_from_model
+from llm.nebius import NebiusModelRouter, load_env_file
 from runtime.state import PolicyGraphSettings, PolicyGraphState
 
 
@@ -34,6 +35,8 @@ __all__ = [
     "emit_response_data",
     "fallback_proposal",
     "label_memory",
+    "load_env_file",
+    "NebiusModelRouter",
     "proposal_from_model",
     "safe_decision_message",
     "safe_message",

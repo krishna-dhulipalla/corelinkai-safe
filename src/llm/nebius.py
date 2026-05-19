@@ -3,13 +3,16 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from pathlib import Path
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
 
-DEFAULT_NEBIUS_MODEL = "meta-llama/Llama-3.3-70B-Instruct"
+DEFAULT_NEBIUS_PRIMARY_MODEL = "deepseek-ai/DeepSeek-V4-Pro"
+DEFAULT_NEBIUS_MEDIUM_MODEL = "meta-llama/Llama-3.3-70B-Instruct"
+DEFAULT_NEBIUS_MODEL = DEFAULT_NEBIUS_PRIMARY_MODEL
 DEFAULT_NEBIUS_BASE_URL = "https://api.tokenfactory.nebius.com/v1"
 
 
@@ -26,11 +29,23 @@ class NebiusConfig:
     temperature: float = 0.1
 
     @classmethod
-    def from_env(cls) -> "NebiusConfig":
+    def from_env(cls, *, role: str = "primary") -> "NebiusConfig":
+        load_env_file()
+        role = role.strip().lower()
+        if role == "medium":
+            model = (
+                os.environ.get("NEBIUS_MEDIUM_MODEL", "").strip()
+                or DEFAULT_NEBIUS_MEDIUM_MODEL
+            )
+        else:
+            model = (
+                os.environ.get("NEBIUS_PRIMARY_MODEL", "").strip()
+                or os.environ.get("NEBIUS_MODEL", "").strip()
+                or DEFAULT_NEBIUS_PRIMARY_MODEL
+            )
         return cls(
             api_key=os.environ.get("NEBIUS_API_KEY", "").strip(),
-            model=os.environ.get("NEBIUS_MODEL", DEFAULT_NEBIUS_MODEL).strip()
-            or DEFAULT_NEBIUS_MODEL,
+            model=model,
             base_url=os.environ.get("NEBIUS_BASE_URL", DEFAULT_NEBIUS_BASE_URL).strip()
             or DEFAULT_NEBIUS_BASE_URL,
             timeout_seconds=int(os.environ.get("NEBIUS_TIMEOUT_SECONDS", "90")),
@@ -90,6 +105,77 @@ class NebiusChatClient:
             return str(data["choices"][0]["message"]["content"] or "")
         except (KeyError, IndexError, TypeError) as exc:
             raise ModelClientError(f"Unexpected Nebius response shape: {data}") from exc
+
+
+@dataclass
+class NebiusModelRouter:
+    """Role-based model access for graph nodes.
+
+    `auxiliary_enabled` is false when tests inject one fake client through the
+    old `model_client` seam, so auxiliary nodes do not consume the fake solver
+    response before `candidate_action`.
+    """
+
+    primary: Any
+    medium: Any
+    auxiliary_enabled: bool = True
+
+    @classmethod
+    def from_env(cls) -> "NebiusModelRouter":
+        return cls(
+            primary=NebiusChatClient(NebiusConfig.from_env(role="primary")),
+            medium=NebiusChatClient(NebiusConfig.from_env(role="medium")),
+            auxiliary_enabled=True,
+        )
+
+    @classmethod
+    def from_single_client(cls, client: Any) -> "NebiusModelRouter":
+        return cls(primary=client, medium=client, auxiliary_enabled=False)
+
+    def client_for(self, role: str) -> Any:
+        if role.strip().lower() == "medium":
+            return self.medium
+        return self.primary
+
+    def role_configured(self, role: str) -> bool:
+        if role.strip().lower() == "medium" and not self.auxiliary_enabled:
+            return False
+        client = self.client_for(role)
+        return bool(getattr(client, "configured", False))
+
+
+def load_env_file(path: str | Path | None = None) -> list[str]:
+    """Load .env values without overriding variables already in the process."""
+    env_path = Path(path) if path else _find_env_file()
+    if env_path is None or not env_path.exists():
+        return []
+
+    loaded: list[str] = []
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        name = name.strip()
+        value = _strip_env_value(value.strip())
+        if name and name not in os.environ:
+            os.environ[name] = value
+            loaded.append(name)
+    return loaded
+
+
+def _find_env_file() -> Path | None:
+    for base in (Path.cwd(), *Path.cwd().parents):
+        candidate = base / ".env"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _strip_env_value(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
 
 
 def extract_json_object(text: str) -> dict[str, Any]:
